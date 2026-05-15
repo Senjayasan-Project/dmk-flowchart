@@ -108,6 +108,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
   transition:all .13s;
 }
 .nav-add-menu-btn:hover{background:var(--blue-bg);color:var(--blue-tx);border-color:var(--blue-bd);}
+.nav-delete-cat-btn{
+  display:flex;align-items:center;justify-content:center;padding:5px 10px;
+  margin:3px 8px 0;border-radius:var(--r-md);cursor:pointer;
+  font-size:11px;font-weight:700;color:#b02a37;
+  background:transparent;border:1px solid rgba(176,42,55,.18);
+  width:calc(100% - 16px);font-family:var(--font);
+  transition:all .13s;
+}
+.nav-delete-cat-btn:hover{background:rgba(176,42,55,.06);color:#8b1a1a;border-color:rgba(176,42,55,.35);}
 /* Supabase status indicator */
 .supabase-status{
   display:flex;align-items:center;gap:6px;padding:6px 12px;
@@ -318,6 +327,12 @@ textarea.modal-input{resize:vertical;min-height:72px;line-height:1.6;}
   box-shadow:0 2px 8px rgba(0,98,255,.25);
 }
 .editor-save-btn:hover{background:var(--dmk-blue-dark);}
+.editor-delete-btn{
+  padding:8px 18px;background:transparent;color:#b02a37;
+  border:1.5px solid rgba(176,42,55,.25);border-radius:var(--r-md);
+  font-size:12.5px;font-weight:700;cursor:pointer;font-family:var(--font);
+}
+.editor-delete-btn:hover{background:rgba(176,42,55,.08);border-color:rgba(176,42,55,.45);}
 .editor-reset-btn{
   padding:8px 16px;background:var(--red-bg);color:var(--red-tx);
   border:1.5px solid var(--red-bd);border-radius:var(--r-md);
@@ -411,7 +426,7 @@ const supabase = window.supabase.createClient(
 );
 
 // ===== NEW DB SYSTEM (APP_DATA JSON) =====
-let _dbCache = { menus: [], categories: [] };
+let _dbCache = null;
 let _dbReady = false;
 
 async function ensureAppData(){
@@ -492,9 +507,32 @@ async function updateMenu(menu){
 }
 
 // ===== INIT =====
+function initEditorSelect() {
+  const saved = getSaved();
+  const sel = document.getElementById('editor-module-sel');
+  if (!sel) return;
+  // Clear existing custom options
+  Array.from(sel.options).forEach(opt => {
+    if (opt.value.startsWith('cat_') || opt.value.includes('_menu_')) opt.remove();
+  });
+  // Add custom menus
+  for (const key in saved) {
+    if (key.startsWith('__menu_')) {
+      const { menuId, menuName, catName } = saved[key];
+      if (!sel.querySelector(`option[value="${menuId}"]`)) {
+        const opt = document.createElement('option');
+        opt.value = menuId;
+        opt.textContent = menuName + ' (' + catName + ')';
+        sel.appendChild(opt);
+      }
+    }
+  }
+  updateEditorDeleteButton(sel.value);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await loadDB();
-  restoreCustomMenus();
+  restoreCustomMenus(await getSavedAsync());
   initEditorSelect();
 });
 </script>
@@ -1411,6 +1449,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <option value="production">Alur Produksi</option>
 <option value="item">Item / Produk</option>
       </select>
+      <button class="editor-delete-btn" id="editor-delete-btn" onclick="confirmDeleteModule(document.getElementById('editor-module-sel').value)" style="display:none">🗑️ Hapus Modul</button>
       <span style="font-size:11px;color:var(--text3);">Perubahan disimpan di browser (localStorage)</span>
     </div>
     <div class="editor-body">
@@ -3979,6 +4018,15 @@ function confirmAddMenu() {
     </div>`;
   main.appendChild(secDiv);
 
+  // Add to editor select
+  const sel = document.getElementById('editor-module-sel');
+  if (sel) {
+    const opt = document.createElement('option');
+    opt.value = menuId;
+    opt.textContent = menuName + ' (' + catName + ')';
+    sel.appendChild(opt);
+  }
+
   // Save
   const saved = getSaved();
   saved['__menu_' + menuId] = { catKey, catName, color, menuName, menuDesc, menuId };
@@ -4055,6 +4103,15 @@ function restoreCustomMenus(saved) {
       </div>`;
     main.appendChild(secDiv);
 
+    // Add to editor select
+    const sel = document.getElementById('editor-module-sel');
+    if (sel && !sel.querySelector(`option[value="${menuId}"]`)) {
+      const opt = document.createElement('option');
+      opt.value = menuId;
+      opt.textContent = menuName + ' (' + catName + ')';
+      sel.appendChild(opt);
+    }
+
     // Restore steps
     for (const sk in saved) {
       const d = saved[sk];
@@ -4113,11 +4170,14 @@ function confirmAddCategory() {
   const editBtn = nav.querySelector('.nav-edit-btn');
   const section = document.createElement('div');
   section.className = 'nav-section';
+  section.id = 'nav-sec-' + catId;
   section.innerHTML = `
     <div class="nav-label">${name}</div>
     <button class="nav-item" onclick="go('${guideId}')" id="nav-${guideId}">
       <span class="nav-dot" style="background:${dotColor}"></span>${guide || name}
-    </button>`;
+    </button>
+    <button class="nav-add-menu-btn" onclick="openAddMenuModal('${catId}','${name}','${color}')" title="Tambah panduan di ${name}">＋ Tambah Menu</button>
+    <button class="nav-delete-cat-btn" onclick="confirmDeleteCategory('${catId}')" title="Hapus kategori ${name}">✕ Hapus Kategori</button>`;
   nav.insertBefore(section, editBtn);
   
   // Create section in main
@@ -4174,6 +4234,62 @@ function confirmAddCategory() {
   showToast('✓ Kategori "' + name + '" berhasil dibuat!');
 }
 
+function confirmDeleteCategory(catKey) {
+  if (!confirm('Hapus kategori ini beserta semua menu dan langkah custom di dalamnya?')) return;
+  deleteCategory(catKey);
+}
+
+function deleteCategory(catKey) {
+  const saved = getSaved();
+  const categoryKey = '__cat_' + catKey;
+  const category = saved[categoryKey];
+  if (category) delete saved[categoryKey];
+
+  const menuIds = [];
+  const stepKeys = [];
+
+  if (category && category.guideId) {
+    stepKeys.push(...Object.keys(saved).filter(k => saved[k] && saved[k].isCustom && saved[k].secId === category.guideId));
+  }
+
+  for (const key in saved) {
+    if (key.startsWith('__menu_') && saved[key].catKey === catKey) {
+      menuIds.push(saved[key].menuId);
+      delete saved[key];
+    }
+  }
+
+  for (const menuId of menuIds) {
+    stepKeys.push(...Object.keys(saved).filter(k => saved[k] && saved[k].isCustom && saved[k].secId === menuId));
+  }
+
+  for (const stepKey of stepKeys) {
+    delete saved[stepKey];
+  }
+
+  saveToDB(saved);
+
+  const navSection = document.getElementById('nav-sec-' + catKey);
+  if (navSection) navSection.remove();
+
+  if (category && category.guideId) {
+    const mainSection = document.getElementById('sec-' + category.guideId);
+    if (mainSection) mainSection.remove();
+    const editorOption = document.querySelector(`#editor-module-sel option[value="${category.guideId}"]`);
+    if (editorOption) editorOption.remove();
+  }
+
+  for (const menuId of menuIds) {
+    const menuSection = document.getElementById('sec-' + menuId);
+    if (menuSection) menuSection.remove();
+    const menuOption = document.querySelector(`#editor-module-sel option[value="${menuId}"]`);
+    if (menuOption) menuOption.remove();
+  }
+
+  cleanupEditorSelection();
+  showToast('🗑️ Kategori dihapus');
+}
+
 // ═══════════════════════════════════════════════
 // EDITOR PAGE (dedicated)
 // ═══════════════════════════════════════════════
@@ -4199,6 +4315,81 @@ function switchEditorModule(secId) {
         prevEl.classList.remove('empty');
       }
     });
+  }
+  updateEditorDeleteButton(secId);
+}
+
+function getCustomModuleData(secId) {
+  const saved = getSaved();
+  const menuEntry = saved['__menu_' + secId];
+  if (menuEntry) return { type: 'menu', data: menuEntry };
+  for (const key in saved) {
+    if (!key.startsWith('__cat_')) continue;
+    const catEntry = saved[key];
+    if (catEntry && catEntry.guideId === secId) {
+      return { type: 'category', catKey: key.slice(6), data: catEntry };
+    }
+  }
+  return null;
+}
+
+function updateEditorDeleteButton(secId) {
+  const btn = document.getElementById('editor-delete-btn');
+  if (!btn) return;
+  const info = getCustomModuleData(secId);
+  if (info) {
+    btn.style.display = 'inline-flex';
+    btn.title = info.type === 'menu'
+      ? 'Hapus menu custom ini'
+      : 'Hapus kategori custom ini';
+    btn.onclick = () => confirmDeleteModule(secId);
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function confirmDeleteModule(secId) {
+  const info = getCustomModuleData(secId);
+  if (!info) return;
+  const name = info.type === 'menu' ? info.data.menuName : info.data.guide || info.data.name;
+  const message = info.type === 'menu'
+    ? `Hapus menu "${name}" beserta semua langkah custom di dalamnya?`
+    : `Hapus kategori "${name}" beserta semua menu dan langkah custom di dalamnya?`;
+  if (!confirm(message)) return;
+  if (info.type === 'menu') deleteMenu(secId);
+  else deleteCategory(info.catKey);
+}
+
+function deleteMenu(menuId) {
+  const saved = getSaved();
+  const menuKey = '__menu_' + menuId;
+  if (saved[menuKey]) delete saved[menuKey];
+  const stepKeys = Object.keys(saved).filter(k => saved[k] && saved[k].isCustom && saved[k].secId === menuId);
+  stepKeys.forEach(k => delete saved[k]);
+  saveToDB(saved);
+
+  const sel = document.getElementById('editor-module-sel');
+  const navBtn = document.getElementById('nav-' + menuId);
+  if (navBtn) navBtn.remove();
+  const section = document.getElementById('sec-' + menuId);
+  if (section) section.remove();
+  if (sel) {
+    const option = sel.querySelector(`option[value="${menuId}"]`);
+    if (option) option.remove();
+    if (sel.value === menuId) {
+      sel.value = sel.options[0]?.value || '';
+      switchEditorModule(sel.value);
+    }
+  }
+  showToast('🗑️ Menu dihapus');
+}
+
+function cleanupEditorSelection() {
+  const sel = document.getElementById('editor-module-sel');
+  if (!sel) return;
+  if (!sel.querySelector(`option[value="${sel.value}"]`)) {
+    sel.value = sel.options[0]?.value || '';
+    switchEditorModule(sel.value);
   }
 }
 
@@ -4312,7 +4503,6 @@ function applyToPage(sid, label, desc, imgSrc) {
 const SUPABASE_URL = window._SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = window._SUPABASE_ANON_KEY || '';
 const APP_ID = 'd365-dmk-v3';
-let _dbCache = null;
 let _dbSaveTimer = null;
 
 async function getSavedAsync() {
@@ -4402,6 +4592,7 @@ function restoreCustomCategories() {
   const saved = getSaved();
   for (const key in saved) {
     if (!key.startsWith('__cat_')) continue;
+    const catKey = key.slice(6);
     const { name, color, guide, desc, guideId } = saved[key];
     if (!document.getElementById('sec-' + guideId)) {
       // Re-create - simplified restore
@@ -4410,10 +4601,13 @@ function restoreCustomCategories() {
       const editBtn = nav.querySelector('.nav-edit-btn');
       const section = document.createElement('div');
       section.className = 'nav-section';
+      section.id = 'nav-sec-' + catKey;
       section.innerHTML = `<div class="nav-label">${name}</div>
         <button class="nav-item" onclick="go('${guideId}')" id="nav-${guideId}">
           <span class="nav-dot" style="background:${dotColor}"></span>${guide || name}
-        </button>`;
+        </button>
+        <button class="nav-add-menu-btn" onclick="openAddMenuModal('${catKey}','${name}','${color}')" title="Tambah panduan di ${name}">＋ Tambah Menu</button>
+        <button class="nav-delete-cat-btn" onclick="confirmDeleteCategory('${catKey}')" title="Hapus kategori ${name}">✕ Hapus Kategori</button>`;
       nav.insertBefore(section, editBtn);
       // Minimal section
       const main = document.querySelector('.main');
@@ -4516,11 +4710,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Apply saved edits
   applyAllSaved(saved);
 
+  // Restore custom categories first so category sections exist for menu injection
+  restoreCustomCategories();
+
   // Restore custom menus (per category)
   restoreCustomMenus(saved);
-
-  // Restore custom categories (full new categories)
-  restoreCustomCategories();
   initEditor();
 
   // Activate first section on load
